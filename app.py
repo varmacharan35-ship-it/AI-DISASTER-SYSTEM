@@ -1,1 +1,1681 @@
-import streamlit as st import pandas as pd import numpy as np import plotly.express as px import plotly.graph_objects as go from sklearn.model_selection import train_test_split from sklearn.ensemble import RandomForestClassifier from sklearn.preprocessing import LabelEncoder from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score # ============================================================ # PAGE CONFIG # ============================================================ st.set_page_config( page_title="AI Disaster Alert System", page_icon="🌍", layout="wide", initial_sidebar_state="expanded" ) # ============================================================ # CUSTOM CSS # ============================================================ st.markdown(""" <style> .main { background-color: #f7f9fc; } .block-container { padding-top: 1.5rem; } .hero { padding: 25px; border-radius: 18px; background: linear-gradient(135deg, #0f172a, #1e3a5f); color: white; margin-bottom: 25px; } .hero h1 { font-size: 38px; margin-bottom: 5px; } .hero p { font-size: 17px; color: #dbeafe; } .card { padding: 20px; border-radius: 15px; background: white; border: 1px solid #e5e7eb; box-shadow: 0px 3px 12px rgba(0,0,0,0.05); min-height: 130px; } .risk-low { padding: 18px; border-radius: 15px; background: #dcfce7; border-left: 7px solid #16a34a; } .risk-medium { padding: 18px; border-radius: 15px; background: #fef9c3; border-left: 7px solid #ca8a04; } .risk-high { padding: 18px; border-radius: 15px; background: #ffedd5; border-left: 7px solid #ea580c; } .risk-extreme { padding: 18px; border-radius: 15px; background: #fee2e2; border-left: 7px solid #dc2626; } .disclaimer { padding: 15px; border-radius: 10px; background: #fff7ed; border: 1px solid #fed7aa; font-size: 14px; } .chatbox { padding: 15px; border-radius: 12px; background: #eff6ff; border-left: 5px solid #2563eb; } </style> """, unsafe_allow_html=True) # ============================================================ # TITLE # ============================================================ st.markdown(""" <div class="hero"> <h1>🌍 AI Disaster Alert & Emergency Assistant</h1> <p> AI-powered environmental risk analysis for flood monitoring, earthquake risk indication and emergency safety assistance. </p> </div> """, unsafe_allow_html=True) # ============================================================ # SESSION STATE # ============================================================ if "dataset" not in st.session_state: st.session_state.dataset = None if "flood_model" not in st.session_state: st.session_state.flood_model = None if "flood_features" not in st.session_state: st.session_state.flood_features = [] if "model_accuracy" not in st.session_state: st.session_state.model_accuracy = None # ============================================================ # HELPER FUNCTIONS # ============================================================ def find_column(df, keywords): """ Finds a column whose name contains one of the keywords. """ for col in df.columns: clean = str(col).lower().replace("_", " ").replace("-", " ") for keyword in keywords: if keyword.lower() in clean: return col return None def normalize_number(value, default=0): try: return float(value) except: return default def calculate_flood_score( rainfall, humidity, temperature, wind_speed, pressure, water_level, soil_moisture ): """ Rule-based fallback risk score. This allows the application to work even when a compatible ML target is not available. """ score = 0 # Rainfall if rainfall >= 200: score += 35 elif rainfall >= 100: score += 25 elif rainfall >= 50: score += 15 elif rainfall >= 20: score += 7 # Water level if water_level >= 8: score += 30 elif water_level >= 5: score += 22 elif water_level >= 3: score += 12 # Soil moisture if soil_moisture >= 80: score += 15 elif soil_moisture >= 60: score += 10 elif soil_moisture >= 40: score += 5 # Humidity if humidity >= 90: score += 10 elif humidity >= 75: score += 6 # Pressure if pressure < 990: score += 8 elif pressure < 1000: score += 4 # Wind if wind_speed >= 70: score += 7 elif wind_speed >= 40: score += 4 return min(score, 100) def flood_category(score): if score >= 80: return "EXTREME" elif score >= 60: return "HIGH" elif score >= 35: return "MODERATE" else: return "LOW" def earthquake_indicator( historical_activity, magnitude, depth, latitude, longitude ): """ Academic earthquake risk indicator. This is NOT an earthquake prediction model. """ score = 0 if historical_activity: score += 30 if magnitude >= 6: score += 35 elif magnitude >= 5: score += 25 elif magnitude >= 4: score += 15 elif magnitude >= 3: score += 8 if depth < 10: score += 20 elif depth < 30: score += 12 elif depth < 70: score += 6 if abs(latitude) > 0 and abs(longitude) > 0: score += 5 return min(score, 100) def earthquake_category(score): if score >= 75: return "HIGH" elif score >= 50: return "MODERATE" elif score >= 25: return "LOW" else: return "VERY LOW" def risk_class(score): if score >= 80: return "risk-extreme" elif score >= 60: return "risk-high" elif score >= 35: return "risk-medium" return "risk-low" def safety_advice(disaster, level): if disaster == "Flood": if level in ["HIGH", "EXTREME"]: return [ "Move to higher ground if flooding is occurring or evacuation is advised.", "Never walk or drive through floodwater.", "Keep your phone charged and emergency supplies ready.", "Stay away from electrical equipment and downed power lines.", "Follow official local disaster-management instructions." ] return [ "Monitor official weather and flood warnings.", "Keep an emergency kit ready.", "Know your nearest safe/high ground location.", "Keep important documents protected." ] else: return [ "DROP to the ground.", "COVER your head and neck.", "HOLD ON to sturdy shelter.", "Stay away from windows and falling objects.", "Do not use elevators.", "After shaking stops, check for injuries and damaged buildings." ] # ============================================================ # SIDEBAR # ============================================================ st.sidebar.title("🌍 Navigation") page = st.sidebar.radio( "Select Module", [ "🏠 Dashboard", "🌊 Flood Prediction", "🌎 Earthquake Risk", "🤖 Disaster AI Assistant", "🚨 Emergency Guide", "📊 Data Analysis", "🗺️ Risk Map", "ℹ️ About Project" ] ) st.sidebar.markdown("---") st.sidebar.subheader("📁 Dataset") uploaded_file = st.sidebar.file_uploader( "Upload CSV dataset", type=["csv"] ) if uploaded_file is not None: try: df_uploaded = pd.read_csv(uploaded_file) st.session_state.dataset = df_uploaded st.sidebar.success( f"Dataset loaded: {len(df_uploaded):,} rows" ) except Exception as e: st.sidebar.error( f"Could not read dataset: {e}" ) # ============================================================ # DEMO MODE # ============================================================ st.sidebar.markdown("---") st.sidebar.subheader("🎬 Demo Mode") demo_mode = st.sidebar.checkbox( "Enable Demo Scenario" ) demo_type = st.sidebar.selectbox( "Scenario", [ "Normal Conditions", "Heavy Rainfall Flood", "Extreme Flood" ] ) # ============================================================ # DASHBOARD # ============================================================ if page == "🏠 Dashboard": st.subheader("📊 Disaster Monitoring Dashboard") if demo_mode: if demo_type == "Normal Conditions": rainfall = 10 humidity = 55 temperature = 28 wind_speed = 15 pressure = 1012 water_level = 1 soil_moisture = 25 elif demo_type == "Heavy Rainfall Flood": rainfall = 130 humidity = 88 temperature = 25 wind_speed = 35 pressure = 995 water_level = 5 soil_moisture = 70 else: rainfall = 250 humidity = 95 temperature = 24 wind_speed = 75 pressure = 985 water_level = 9 soil_moisture = 90 flood_score = calculate_flood_score( rainfall, humidity, temperature, wind_speed, pressure, water_level, soil_moisture ) flood_level = flood_category(flood_score) else: flood_score = 20 flood_level = "LOW" # Earthquake indicator earthquake_score = 15 earthquake_level = earthquake_category( earthquake_score ) overall_score = max( flood_score, earthquake_score ) if overall_score >= 80: overall = "EMERGENCY" elif overall_score >= 60: overall = "WARNING" elif overall_score >= 35: overall = "WATCH" else: overall = "NORMAL" c1, c2, c3, c4 = st.columns(4) with c1: st.metric( "🌊 Flood Risk", flood_level, f"{flood_score}%" ) with c2: st.metric( "🌎 Earthquake Risk", earthquake_level, f"{earthquake_score}%" ) with c3: st.metric( "⚠️ Overall Alert", overall ) with c4: st.metric( "📊 Data Records", len(st.session_state.dataset) if st.session_state.dataset is not None else 0 ) st.markdown("---") # Alert if overall == "EMERGENCY": st.error( "🔴 EMERGENCY: High-risk conditions detected. " "Follow official emergency instructions." ) elif overall == "WARNING": st.warning( "🟠 WARNING: Hazardous conditions may be developing." ) elif overall == "WATCH": st.warning( "🟡 WATCH: Monitor conditions and official alerts." ) else: st.success( "🟢 NORMAL: No major risk detected by the current indicator." ) # Demo parameters if demo_mode: st.subheader("🌧️ Current Environmental Conditions") a, b, c, d = st.columns(4) a.metric("Rainfall", f"{rainfall} mm") b.metric("Humidity", f"{humidity}%") c.metric("Water Level", f"{water_level} m") d.metric("Soil Moisture", f"{soil_moisture}%") st.markdown("---") st.subheader("🧠 Why This Result?") if flood_score >= 60: st.write( "The flood-risk indicator is elevated because " "the scenario contains significant environmental " "risk factors such as rainfall, water level, " "humidity and soil moisture." ) else: st.write( "Current environmental conditions indicate " "relatively low flood risk." ) st.markdown( """ <div class="disclaimer"> <b>⚠️ Academic Safety Disclaimer:</b><br> This system is a decision-support prototype. It does not guarantee natural-disaster prediction. Earthquake results are risk indicators and cannot predict the exact time, location or magnitude of an earthquake. Always follow official government and emergency-management alerts. </div> """, unsafe_allow_html=True ) # ============================================================ # FLOOD PREDICTION # ============================================================ elif page == "🌊 Flood Prediction": st.subheader("🌊 AI Flood Risk Prediction") st.write( "Enter environmental conditions to estimate flood risk." ) col1, col2 = st.columns(2) with col1: rainfall = st.number_input( "🌧️ Rainfall (mm)", min_value=0.0, max_value=1000.0, value=50.0 ) humidity = st.slider( "💧 Humidity (%)", 0, 100, 70 ) temperature = st.number_input( "🌡️ Temperature (°C)", -20.0, 60.0, 28.0 ) wind_speed = st.number_input( "💨 Wind Speed (km/h)", 0.0, 300.0, 20.0 ) with col2: pressure = st.number_input( "🌬️ Atmospheric Pressure (hPa)", 850.0, 1100.0, 1010.0 ) water_level = st.number_input( "🌊 Water Level (m)", 0.0, 20.0, 2.0 ) soil_moisture = st.slider( "🌱 Soil Moisture (%)", 0, 100, 40 ) if st.button( "🔍 ANALYZE FLOOD RISK", type="primary", use_container_width=True ): score = calculate_flood_score( rainfall, humidity, temperature, wind_speed, pressure, water_level, soil_moisture ) category = flood_category(score) st.markdown("---") css = risk_class(score) st.markdown( f""" <div class="{css}"> <h2>🌊 Flood Risk: {category}</h2> <h3>Risk Score: {score}%</h3> </div> """, unsafe_allow_html=True ) st.markdown("### 🧠 Risk Factors") factors = [] if rainfall >= 100: factors.append("🌧️ Heavy rainfall") if water_level >= 5: factors.append("🌊 High water level") if soil_moisture >= 70: factors.append("🌱 High soil moisture") if humidity >= 85: factors.append("💧 High humidity") if pressure < 1000: factors.append("🌬️ Low atmospheric pressure") if wind_speed >= 50: factors.append("💨 Strong wind") if not factors: factors.append( "No major environmental risk factor detected." ) for factor in factors: st.write("• " + factor) st.markdown("### 🚨 Recommended Actions") for advice in safety_advice("Flood", category): st.write("✅ " + advice) # Gauge fig = go.Figure( go.Indicator( mode="gauge+number", value=score, title={"text": "Flood Risk Score"}, gauge={ "axis": {"range": [0, 100]}, "steps": [ {"range": [0, 35]}, {"range": [35, 60]}, {"range": [60, 80]}, {"range": [80, 100]} ] } ) ) st.plotly_chart( fig, use_container_width=True ) # ============================================================ # EARTHQUAKE RISK # ============================================================ elif page == "🌎 Earthquake Risk": st.subheader( "🌎 Earthquake Risk Indicator" ) st.warning( "This is a probabilistic risk indicator, NOT an exact " "earthquake prediction system." ) col1, col2 = st.columns(2) with col1: historical = st.checkbox( "Historical seismic activity present" ) magnitude = st.number_input( "Historical/Recent Magnitude", 0.0, 10.0, 3.0 ) depth = st.number_input( "Depth (km)", 0.0, 700.0, 50.0 ) with col2: latitude = st.number_input( "Latitude", -90.0, 90.0, 23.25 ) longitude = st.number_input( "Longitude", -180.0, 180.0, 77.41 ) if st.button( "🌎 ANALYZE EARTHQUAKE RISK", type="primary", use_container_width=True ): score = earthquake_indicator( historical, magnitude, depth, latitude, longitude ) category = earthquake_category(score) st.markdown("---") st.markdown( f""" <div class="{risk_class(score)}"> <h2>🌎 Earthquake Risk Indicator: {category}</h2> <h3>Indicator Score: {score}%</h3> </div> """, unsafe_allow_html=True ) st.markdown("### 🔎 Factors Considered") st.write( "• Historical seismic activity" ) st.write( "• Historical/recent earthquake magnitude" ) st.write( "• Earthquake depth" ) st.write( "• Geographic location" ) st.markdown("### 🛡️ Safety Actions") for advice in safety_advice( "Earthquake", category ): st.write("✅ " + advice) st.markdown( """ <div class="disclaimer"> <b>Important:</b> Weather variables alone cannot scientifically predict earthquakes. A real earthquake forecasting system would require appropriate seismic, geological and historical earthquake datasets. </div> """, unsafe_allow_html=True ) # ============================================================ # AI ASSISTANT # ============================================================ elif page == "🤖 Disaster AI Assistant": st.subheader( "🤖 Disaster AI Assistant" ) st.write( "Ask the assistant about earthquake and flood safety." ) question = st.text_input( "💬 Ask your question", placeholder="What should I do during a flood?" ) if question: q = question.lower() if "earthquake" in q: answer = """ ### 🌎 Earthquake Safety During an earthquake: 1. DROP to the ground. 2. COVER your head and neck. 3. HOLD ON to sturdy shelter. 4. Stay away from windows and falling objects. 5. Do not use elevators. 6. If outside, move away from buildings and power lines. After the earthquake, check for injuries, expect aftershocks, avoid damaged structures and follow official instructions. """ elif "flood" in q: answer = """ ### 🌊 Flood Safety During flooding: 1. Move to higher ground if flooding is occurring or evacuation is advised. 2. Never walk or drive through floodwater. 3. Stay away from electrical equipment and downed power lines. 4. Keep your phone charged. 5. Follow official evacuation and disaster-management instructions. """ elif "emergency kit" in q or "kit" in q: answer = """ ### 🎒 Emergency Kit Consider keeping: - Drinking water - Basic food - First-aid supplies - Medicines - Flashlight - Batteries/power bank - Important documents - Emergency contact information - Basic hygiene supplies """ elif "evacuate" in q: answer = """ ### 🚨 Evacuation If local authorities issue an evacuation order, follow it promptly and use the recommended evacuation route. Do not rely only on this application for evacuation decisions. """ elif "after earthquake" in q: answer = """ ### 🌎 After an Earthquake - Check yourself and others for injuries. - Expect aftershocks. - Avoid visibly damaged buildings. - Watch for electrical, gas and structural hazards. - Follow official emergency instructions. """ else: answer = """ ### 🤖 Disaster Assistant I can help with: - 🌊 Flood safety - 🌎 Earthquake safety - 🎒 Emergency kits - 🚨 Evacuation preparation - 🏠 Disaster preparedness For a real emergency, always follow official emergency services and government disaster-management instructions. """ st.markdown( f""" <div class="chatbox"> {answer} </div> """, unsafe_allow_html=True ) # ============================================================ # EMERGENCY GUIDE # ============================================================ elif page == "🚨 Emergency Guide": st.subheader( "🚨 Emergency Preparedness Guide" ) tab1, tab2, tab3 = st.tabs( [ "🌊 Flood", "🌎 Earthquake", "🎒 Emergency Kit" ] ) with tab1: st.header("🌊 Flood Safety") st.subheader("Before a Flood") st.write("✅ Monitor official weather warnings.") st.write("✅ Prepare an emergency kit.") st.write("✅ Protect important documents.") st.write("✅ Know safe/high-ground locations.") st.write("✅ Keep phones and power banks charged.") st.subheader("During a Flood") st.write("🚨 Move to higher ground when advised.") st.write("🚨 Never drive through floodwater.") st.write("🚨 Stay away from electrical hazards.") st.write("🚨 Follow evacuation instructions.") st.subheader("After a Flood") st.write("✅ Avoid contaminated water.") st.write("✅ Avoid damaged buildings.") st.write("✅ Watch for electrical hazards.") st.write("✅ Follow official instructions.") with tab2: st.header("🌎 Earthquake Safety") st.subheader("During") st.write("⬇️ DROP") st.write("🛡️ COVER") st.write("✊ HOLD ON") st.write("🚫 Stay away from windows.") st.write("🚫 Do not use elevators.") st.subheader("After") st.write("✅ Check injuries.") st.write("✅ Expect aftershocks.") st.write("✅ Avoid damaged structures.") st.write("✅ Follow official instructions.") with tab3: st.header("🎒 Emergency Kit") items = [ "Drinking water", "Non-perishable food", "First-aid kit", "Necessary medicines", "Flashlight", "Batteries", "Power bank", "Important documents", "Emergency contact information", "Basic hygiene supplies" ] for item in items: st.checkbox(item) # ============================================================ # DATA ANALYSIS # ============================================================ elif page == "📊 Data Analysis": st.subheader( "📊 Dataset Analysis" ) df = st.session_state.dataset if df is None: st.info( "Upload a CSV dataset from the sidebar to analyze it." ) else: c1, c2, c3 = st.columns(3) c1.metric( "Rows", f"{df.shape[0]:,}" ) c2.metric( "Columns", df.shape[1] ) c3.metric( "Missing Values", int(df.isna().sum().sum()) ) st.markdown("---") st.subheader("👀 Dataset Preview") st.dataframe( df.head(100), use_container_width=True ) st.subheader("📋 Dataset Information") info_df = pd.DataFrame({ "Column": df.columns, "Data Type": [ str(x) for x in df.dtypes ], "Missing Values": [ int(df[c].isna().sum()) for c in df.columns ], "Unique Values": [ int(df[c].nunique()) for c in df.columns ] }) st.dataframe( info_df, use_container_width=True ) numeric = df.select_dtypes( include=np.number ) if not numeric.empty: st.subheader( "📈 Numerical Distribution" ) selected_column = st.selectbox( "Select numerical feature", numeric.columns ) fig = px.histogram( df, x=selected_column, title=f"Distribution of {selected_column}" ) st.plotly_chart( fig, use_container_width=True ) if numeric.shape[1] >= 2: st.subheader( "🔥 Correlation Matrix" ) corr = numeric.corr() fig = px.imshow( corr, text_auto=True, title="Feature Correlation" ) st.plotly_chart( fig, use_container_width=True ) # ============================================================ # RISK MAP # ============================================================ elif page == "🗺️ Risk Map": st.subheader( "🗺️ Disaster Risk Map" ) df = st.session_state.dataset if df is None: st.info( "Upload a dataset containing latitude and longitude " "to visualize geographic information." ) else: lat_col = find_column( df, ["latitude", "lat"] ) lon_col = find_column( df, ["longitude", "lon", "lng"] ) if lat_col and lon_col: map_df = df[ [lat_col, lon_col] ].copy() map_df.columns = [ "latitude", "longitude" ] map_df["latitude"] = pd.to_numeric( map_df["latitude"], errors="coerce" ) map_df["longitude"] = pd.to_numeric( map_df["longitude"], errors="coerce" ) map_df = map_df.dropna() st.map( map_df, latitude="latitude", longitude="longitude", use_container_width=True ) st.success( f"Showing {len(map_df):,} geographic records." ) else: st.warning( "Latitude and longitude columns were not found " "in the uploaded dataset." ) # ============================================================ # ABOUT # ============================================================ elif page == "ℹ️ About Project": st.subheader( "ℹ️ About the Project" ) st.markdown(""" ## 🌍 AI Disaster Alert & Emergency Assistant ### Project Objective The objective of this project is to develop an AI-powered disaster decision-support system capable of analyzing environmental information and providing disaster-risk indicators and emergency safety assistance. ### Major Modules **1. Flood Risk Prediction** - Environmental feature analysis - Rainfall analysis - Water-level analysis - Soil moisture - Humidity - Atmospheric pressure **2. Earthquake Risk Indicator** - Historical seismic activity - Magnitude - Depth - Geographic location **3. AI Disaster Assistant** - Emergency safety guidance - Disaster preparation - Flood precautions - Earthquake precautions **4. Data Visualization** - Interactive charts - Dataset analysis - Correlation analysis - Geographic visualization ### Technologies - Python - Streamlit - Pandas - NumPy - Scikit-learn - Plotly - Machine Learning ### Future Scope - Real-time weather APIs - Official disaster alerts - IoT sensors - Satellite imagery - GIS-based risk mapping - Advanced deep learning - SMS/email notification integration - Real-time river monitoring - Government disaster-management API integration ### Important Limitation The application is an academic decision-support prototype. It does not guarantee disaster prediction. Earthquake risk cannot be accurately predicted from ordinary weather data alone. A scientifically meaningful earthquake-risk model requires appropriate seismic, geological and historical earthquake data. """) st.markdown( """ <div class="disclaimer"> <b>⚠️ Disclaimer:</b> For actual emergencies, follow official government, disaster-management and emergency-service instructions. </div> """, unsafe_allow_html=True ) # ============================================================ # FOOTER # ============================================================ st.markdown("---") st.caption( "🌍 AI Disaster Alert System | Academic AI/ML Project | " "Use official emergency sources for real-world decisions." )
+import streamlit as st
+import pandas as pd
+import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
+
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.preprocessing import LabelEncoder
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+
+# ============================================================
+# CONFIG
+# ============================================================
+
+st.set_page_config(
+    page_title="AI Disaster Alert System",
+    page_icon="🌍",
+    layout="wide"
+)
+
+# ============================================================
+# STYLE
+# ============================================================
+
+st.markdown("""
+<style>
+
+.main {
+    background-color: #f5f7fb;
+}
+
+.block-container {
+    padding-top: 1.5rem;
+}
+
+.hero {
+    padding: 30px;
+    border-radius: 20px;
+    background: linear-gradient(135deg, #07111f, #173b63);
+    color: white;
+    margin-bottom: 25px;
+}
+
+.hero h1 {
+    font-size: 40px;
+    margin-bottom: 5px;
+}
+
+.hero p {
+    font-size: 17px;
+    color: #dbeafe;
+}
+
+.card {
+    padding: 20px;
+    border-radius: 16px;
+    background: white;
+    border: 1px solid #e5e7eb;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.06);
+}
+
+.low {
+    padding: 20px;
+    border-radius: 15px;
+    background: #dcfce7;
+    border-left: 7px solid #16a34a;
+}
+
+.medium {
+    padding: 20px;
+    border-radius: 15px;
+    background: #fef9c3;
+    border-left: 7px solid #ca8a04;
+}
+
+.high {
+    padding: 20px;
+    border-radius: 15px;
+    background: #ffedd5;
+    border-left: 7px solid #ea580c;
+}
+
+.extreme {
+    padding: 20px;
+    border-radius: 15px;
+    background: #fee2e2;
+    border-left: 7px solid #dc2626;
+}
+
+.disclaimer {
+    padding: 18px;
+    border-radius: 12px;
+    background: #fff7ed;
+    border: 1px solid #fed7aa;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# ============================================================
+# SESSION STATE
+# ============================================================
+
+if "dataset" not in st.session_state:
+    st.session_state.dataset = None
+
+if "model" not in st.session_state:
+    st.session_state.model = None
+
+if "model_features" not in st.session_state:
+    st.session_state.model_features = []
+
+if "target_encoder" not in st.session_state:
+    st.session_state.target_encoder = None
+
+if "model_accuracy" not in st.session_state:
+    st.session_state.model_accuracy = None
+
+
+# ============================================================
+# HELPER FUNCTIONS
+# ============================================================
+
+def clean_name(name):
+    return (
+        str(name)
+        .lower()
+        .strip()
+        .replace("_", " ")
+        .replace("-", " ")
+    )
+
+
+def find_column(df, keywords):
+
+    for col in df.columns:
+
+        name = clean_name(col)
+
+        for keyword in keywords:
+
+            if keyword in name:
+                return col
+
+    return None
+
+
+def risk_class(score):
+
+    if score >= 80:
+        return "extreme"
+
+    if score >= 60:
+        return "high"
+
+    if score >= 35:
+        return "medium"
+
+    return "low"
+
+
+def flood_category(score):
+
+    if score >= 80:
+        return "EXTREME"
+
+    if score >= 60:
+        return "HIGH"
+
+    if score >= 35:
+        return "MODERATE"
+
+    return "LOW"
+
+
+def calculate_flood_score(
+    rainfall,
+    humidity,
+    temperature,
+    wind,
+    pressure,
+    water_level,
+    soil_moisture
+):
+
+    score = 0
+
+    # Rainfall
+    if rainfall >= 200:
+        score += 35
+
+    elif rainfall >= 100:
+        score += 27
+
+    elif rainfall >= 50:
+        score += 17
+
+    elif rainfall >= 20:
+        score += 8
+
+    # Water level
+    if water_level >= 8:
+        score += 30
+
+    elif water_level >= 5:
+        score += 23
+
+    elif water_level >= 3:
+        score += 12
+
+    # Soil moisture
+    if soil_moisture >= 80:
+        score += 15
+
+    elif soil_moisture >= 60:
+        score += 10
+
+    elif soil_moisture >= 40:
+        score += 5
+
+    # Humidity
+    if humidity >= 90:
+        score += 10
+
+    elif humidity >= 75:
+        score += 6
+
+    # Pressure
+    if pressure < 990:
+        score += 8
+
+    elif pressure < 1000:
+        score += 4
+
+    # Wind
+    if wind >= 70:
+        score += 7
+
+    elif wind >= 40:
+        score += 4
+
+    return min(score, 100)
+
+
+def earthquake_score(
+    historical,
+    magnitude,
+    depth,
+    latitude,
+    longitude
+):
+
+    score = 0
+
+    if historical:
+        score += 30
+
+    if magnitude >= 6:
+        score += 35
+
+    elif magnitude >= 5:
+        score += 25
+
+    elif magnitude >= 4:
+        score += 15
+
+    elif magnitude >= 3:
+        score += 8
+
+    if depth < 10:
+        score += 20
+
+    elif depth < 30:
+        score += 12
+
+    elif depth < 70:
+        score += 6
+
+    if latitude != 0 and longitude != 0:
+        score += 5
+
+    return min(score, 100)
+
+
+def earthquake_category(score):
+
+    if score >= 75:
+        return "HIGH"
+
+    elif score >= 50:
+        return "MODERATE"
+
+    elif score >= 25:
+        return "LOW"
+
+    return "VERY LOW"
+
+
+def get_flood_advice(level):
+
+    if level in ["HIGH", "EXTREME"]:
+
+        return [
+            "Move to higher ground if flooding is occurring or evacuation is advised.",
+            "Never walk or drive through floodwater.",
+            "Keep your phone charged.",
+            "Keep medicines and important documents ready.",
+            "Stay away from electrical equipment and downed power lines.",
+            "Follow official disaster-management instructions."
+        ]
+
+    return [
+        "Monitor official weather and flood warnings.",
+        "Keep an emergency kit ready.",
+        "Know the nearest safe/high-ground location.",
+        "Protect important documents.",
+        "Keep your phone and power bank charged."
+    ]
+
+
+def train_flood_model(df):
+
+    """
+    Automatically attempts to train a Random Forest
+    when the uploaded dataset contains a recognizable
+    flood target column.
+    """
+
+    target_col = find_column(
+        df,
+        [
+            "flood",
+            "flood risk",
+            "floodrisk",
+            "flood label",
+            "flood status"
+        ]
+    )
+
+    if target_col is None:
+        return None, [], None, None
+
+    numeric_columns = df.select_dtypes(
+        include=np.number
+    ).columns.tolist()
+
+    numeric_columns = [
+        c for c in numeric_columns
+        if c != target_col
+    ]
+
+    if len(numeric_columns) < 2:
+        return None, [], None, None
+
+    work = df[numeric_columns + [target_col]].copy()
+
+    work = work.dropna()
+
+    if len(work) < 30:
+        return None, [], None, None
+
+    if work[target_col].nunique() < 2:
+        return None, [], None, None
+
+    X = work[numeric_columns]
+
+    y_raw = work[target_col].astype(str)
+
+    encoder = LabelEncoder()
+
+    y = encoder.fit_transform(y_raw)
+
+    try:
+
+        X_train, X_test, y_train, y_test = train_test_split(
+            X,
+            y,
+            test_size=0.20,
+            random_state=42,
+            stratify=y
+        )
+
+    except:
+
+        X_train, X_test, y_train, y_test = train_test_split(
+            X,
+            y,
+            test_size=0.20,
+            random_state=42
+        )
+
+    model = RandomForestClassifier(
+        n_estimators=150,
+        random_state=42,
+        class_weight="balanced"
+    )
+
+    model.fit(
+        X_train,
+        y_train
+    )
+
+    prediction = model.predict(X_test)
+
+    accuracy = accuracy_score(
+        y_test,
+        prediction
+    )
+
+    return (
+        model,
+        numeric_columns,
+        encoder,
+        accuracy
+    )
+
+
+# ============================================================
+# HEADER
+# ============================================================
+
+st.markdown("""
+<div class="hero">
+
+<h1>🌍 AI Disaster Alert System</h1>
+
+<p>
+AI-powered Flood Risk Prediction,
+Earthquake Risk Analysis and Emergency Assistant
+</p>
+
+</div>
+""", unsafe_allow_html=True)
+
+
+# ============================================================
+# SIDEBAR
+# ============================================================
+
+st.sidebar.title("🌍 Disaster AI")
+
+page = st.sidebar.radio(
+    "Navigation",
+    [
+        "🏠 Dashboard",
+        "🌊 Flood Prediction",
+        "🌎 Earthquake Risk",
+        "🤖 AI Assistant",
+        "🚨 Emergency Guide",
+        "📊 Dataset Analysis",
+        "🗺️ Risk Map",
+        "ℹ️ About"
+    ]
+)
+
+st.sidebar.markdown("---")
+
+st.sidebar.subheader("📁 Dataset")
+
+uploaded_file = st.sidebar.file_uploader(
+    "Upload your CSV dataset",
+    type=["csv"]
+)
+
+if uploaded_file is not None:
+
+    try:
+
+        df = pd.read_csv(
+            uploaded_file
+        )
+
+        st.session_state.dataset = df
+
+        st.sidebar.success(
+            f"Loaded {len(df):,} records"
+        )
+
+        # Automatically attempt ML training
+        model, features, encoder, accuracy = train_flood_model(df)
+
+        if model is not None:
+
+            st.session_state.model = model
+            st.session_state.model_features = features
+            st.session_state.target_encoder = encoder
+            st.session_state.model_accuracy = accuracy
+
+            st.sidebar.success(
+                f"Flood ML model trained: {accuracy:.1%}"
+            )
+
+        else:
+
+            st.session_state.model = None
+
+            st.sidebar.info(
+                "No compatible flood target found. "
+                "Risk-score mode is active."
+            )
+
+    except Exception as e:
+
+        st.sidebar.error(
+            f"Dataset error: {e}"
+        )
+
+
+# ============================================================
+# DEMO MODE
+# ============================================================
+
+st.sidebar.markdown("---")
+
+st.sidebar.subheader("🎬 Demo Mode")
+
+demo = st.sidebar.checkbox(
+    "Enable Demo"
+)
+
+demo_scenario = st.sidebar.selectbox(
+    "Select scenario",
+    [
+        "Normal",
+        "Heavy Rainfall",
+        "Extreme Flood"
+    ]
+)
+
+
+# ============================================================
+# DASHBOARD
+# ============================================================
+
+if page == "🏠 Dashboard":
+
+    st.subheader(
+        "📊 Disaster Monitoring Dashboard"
+    )
+
+    if demo:
+
+        if demo_scenario == "Normal":
+
+            rainfall = 10
+            humidity = 55
+            temperature = 28
+            wind = 15
+            pressure = 1015
+            water_level = 1
+            soil = 25
+
+        elif demo_scenario == "Heavy Rainfall":
+
+            rainfall = 130
+            humidity = 88
+            temperature = 25
+            wind = 35
+            pressure = 995
+            water_level = 5
+            soil = 70
+
+        else:
+
+            rainfall = 250
+            humidity = 95
+            temperature = 24
+            wind = 75
+            pressure = 985
+            water_level = 9
+            soil = 90
+
+        flood_score = calculate_flood_score(
+            rainfall,
+            humidity,
+            temperature,
+            wind,
+            pressure,
+            water_level,
+            soil
+        )
+
+    else:
+
+        flood_score = 20
+
+    flood_level = flood_category(
+        flood_score
+    )
+
+    earthquake = 15
+
+    earthquake_level = earthquake_category(
+        earthquake
+    )
+
+    overall_score = max(
+        flood_score,
+        earthquake
+    )
+
+    if overall_score >= 80:
+        alert = "EMERGENCY"
+
+    elif overall_score >= 60:
+        alert = "WARNING"
+
+    elif overall_score >= 35:
+        alert = "WATCH"
+
+    else:
+        alert = "NORMAL"
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    col1.metric(
+        "🌊 Flood Risk",
+        flood_level,
+        f"{flood_score}%"
+    )
+
+    col2.metric(
+        "🌎 Earthquake Risk",
+        earthquake_level,
+        f"{earthquake}%"
+    )
+
+    col3.metric(
+        "🚨 Alert Status",
+        alert
+    )
+
+    col4.metric(
+        "📁 Dataset Records",
+        len(st.session_state.dataset)
+        if st.session_state.dataset is not None
+        else 0
+    )
+
+    st.markdown("---")
+
+    if alert == "EMERGENCY":
+
+        st.error(
+            "🔴 EMERGENCY — High-risk conditions detected. "
+            "Follow official emergency instructions."
+        )
+
+    elif alert == "WARNING":
+
+        st.warning(
+            "🟠 WARNING — Hazardous conditions may be developing."
+        )
+
+    elif alert == "WATCH":
+
+        st.warning(
+            "🟡 WATCH — Monitor weather and official alerts."
+        )
+
+    else:
+
+        st.success(
+            "🟢 NORMAL — No major risk detected."
+        )
+
+    if demo:
+
+        st.subheader(
+            "🌧️ Environmental Conditions"
+        )
+
+        a, b, c, d = st.columns(4)
+
+        a.metric(
+            "Rainfall",
+            f"{rainfall} mm"
+        )
+
+        b.metric(
+            "Humidity",
+            f"{humidity}%"
+        )
+
+        c.metric(
+            "Water Level",
+            f"{water_level} m"
+        )
+
+        d.metric(
+            "Soil Moisture",
+            f"{soil}%"
+        )
+
+        chart_data = pd.DataFrame({
+            "Factor": [
+                "Rainfall",
+                "Humidity",
+                "Water Level",
+                "Soil Moisture",
+                "Wind"
+            ],
+            "Value": [
+                rainfall,
+                humidity,
+                water_level * 10,
+                soil,
+                wind
+            ]
+        })
+
+        fig = px.bar(
+            chart_data,
+            x="Factor",
+            y="Value",
+            title="Environmental Risk Factors"
+        )
+
+        st.plotly_chart(
+            fig,
+            use_container_width=True
+        )
+
+    st.markdown("---")
+
+    st.subheader(
+        "🧠 AI Risk Explanation"
+    )
+
+    if flood_score >= 60:
+
+        st.write(
+            "The flood-risk indicator is elevated because "
+            "environmental conditions such as rainfall, "
+            "water level, humidity and soil moisture "
+            "indicate increased flooding potential."
+        )
+
+    else:
+
+        st.write(
+            "Current conditions indicate relatively "
+            "low flood risk."
+        )
+
+    st.markdown("""
+<div class="disclaimer">
+
+<b>⚠️ Important Safety Disclaimer</b>
+
+This is an academic AI decision-support prototype.
+It does not guarantee natural-disaster prediction.
+
+Earthquake risk is an indicator and cannot predict
+the exact time, location or magnitude of an earthquake.
+
+Always follow official government and emergency-management
+warnings.
+
+</div>
+""", unsafe_allow_html=True)
+
+
+# ============================================================
+# FLOOD PREDICTION
+# ============================================================
+
+elif page == "🌊 Flood Prediction":
+
+    st.subheader(
+        "🌊 AI Flood Risk Prediction"
+    )
+
+    st.write(
+        "Enter current environmental conditions."
+    )
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+
+        rainfall = st.number_input(
+            "🌧️ Rainfall (mm)",
+            0.0,
+            1000.0,
+            50.0
+        )
+
+        humidity = st.slider(
+            "💧 Humidity (%)",
+            0,
+            100,
+            70
+        )
+
+        temperature = st.number_input(
+            "🌡️ Temperature (°C)",
+            -20.0,
+            60.0,
+            28.0
+        )
+
+        wind = st.number_input(
+            "💨 Wind Speed (km/h)",
+            0.0,
+            300.0,
+            20.0
+        )
+
+    with col2:
+
+        pressure = st.number_input(
+            "🌬️ Pressure (hPa)",
+            850.0,
+            1100.0,
+            1010.0
+        )
+
+        water_level = st.number_input(
+            "🌊 Water Level (m)",
+            0.0,
+            20.0,
+            2.0
+        )
+
+        soil = st.slider(
+            "🌱 Soil Moisture (%)",
+            0,
+            100,
+            40
+        )
+
+    if st.button(
+        "🔍 ANALYZE FLOOD RISK",
+        type="primary",
+        use_container_width=True
+    ):
+
+        score = calculate_flood_score(
+            rainfall,
+            humidity,
+            temperature,
+            wind,
+            pressure,
+            water_level,
+            soil
+        )
+
+        level = flood_category(
+            score
+        )
+
+        st.markdown("---")
+
+        st.markdown(
+            f"""
+<div class="{risk_class(score)}">
+
+<h2>🌊 Flood Risk: {level}</h2>
+
+<h3>Risk Score: {score}%</h3>
+
+</div>
+""",
+            unsafe_allow_html=True
+        )
+
+        st.subheader(
+            "🧠 Major Risk Factors"
+        )
+
+        factors = []
+
+        if rainfall >= 100:
+            factors.append(
+                "🌧️ Heavy rainfall"
+            )
+
+        if water_level >= 5:
+            factors.append(
+                "🌊 High water level"
+            )
+
+        if soil >= 70:
+            factors.append(
+                "🌱 High soil moisture"
+            )
+
+        if humidity >= 85:
+            factors.append(
+                "💧 High humidity"
+            )
+
+        if pressure < 1000:
+            factors.append(
+                "🌬️ Low atmospheric pressure"
+            )
+
+        if wind >= 50:
+            factors.append(
+                "💨 Strong wind"
+            )
+
+        if not factors:
+
+            factors.append(
+                "No major risk factor detected."
+            )
+
+        for factor in factors:
+
+            st.write(
+                "• " + factor
+            )
+
+        st.subheader(
+            "🚨 Recommended Safety Actions"
+        )
+
+        for advice in get_flood_advice(level):
+
+            st.write(
+                "✅ " + advice
+            )
+
+        fig = go.Figure(
+            go.Indicator(
+                mode="gauge+number",
+                value=score,
+                title={
+                    "text": "Flood Risk Score"
+                },
+                gauge={
+                    "axis": {
+                        "range": [0, 100]
+                    }
+                }
+            )
+        )
+
+        st.plotly_chart(
+            fig,
+            use_container_width=True
+        )
+
+    # ML model information
+    if st.session_state.model is not None:
+
+        st.markdown("---")
+
+        st.subheader(
+            "🤖 Machine Learning Model"
+        )
+
+        st.success(
+            f"Random Forest model trained from uploaded dataset. "
+            f"Test accuracy: "
+            f"{st.session_state.model_accuracy:.2%}"
+        )
+
+        st.write(
+            "Model features:"
+        )
+
+        st.write(
+            st.session_state.model_features
+        )
+
+
+# ============================================================
+# EARTHQUAKE
+# ============================================================
+
+elif page == "🌎 Earthquake Risk":
+
+    st.subheader(
+        "🌎 Earthquake Risk Indicator"
+    )
+
+    st.warning(
+        "This module provides a risk indicator, not an exact "
+        "earthquake prediction."
+    )
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+
+        historical = st.checkbox(
+            "Historical seismic activity"
+        )
+
+        magnitude = st.number_input(
+            "Historical/Recent Magnitude",
+            0.0,
+            10.0,
+            3.0
+        )
+
+        depth = st.number_input(
+            "Depth (km)",
+            0.0,
+            700.0,
+            50.0
+        )
+
+    with col2:
+
+        latitude = st.number_input(
+            "Latitude",
+            -90.0,
+            90.0,
+            23.25
+        )
+
+        longitude = st.number_input(
+            "Longitude",
+            -180.0,
+            180.0,
+            77.41
+        )
+
+    if st.button(
+        "🌎 ANALYZE EARTHQUAKE RISK",
+        type="primary",
+        use_container_width=True
+    ):
+
+        score = earthquake_score(
+            historical,
+            magnitude,
+            depth,
+            latitude,
+            longitude
+        )
+
+        level = earthquake_category(
+            score
+        )
+
+        st.markdown("---")
+
+        st.markdown(
+            f"""
+<div class="{risk_class(score)}">
+
+<h2>🌎 Earthquake Risk: {level}</h2>
+
+<h3>Risk Indicator: {score}%</h3>
+
+</div>
+""",
+            unsafe_allow_html=True
+        )
+
+        st.subheader(
+            "🔎 Factors Considered"
+        )
+
+        st.write(
+            "• Historical seismic activity"
+        )
+
+        st.write(
+            "• Magnitude"
+        )
+
+        st.write(
+            "• Depth"
+        )
+
+        st.write(
+            "• Geographic location"
+        )
+
+        st.subheader(
+            "🛡️ Earthquake Safety"
+        )
+
+        st.write(
+            "⬇️ DROP to the ground."
+        )
+
+        st.write(
+            "🛡️ COVER your head and neck."
+        )
+
+        st.write(
+            "✊ HOLD ON to sturdy shelter."
+        )
+
+        st.write(
+            "🚫 Stay away from windows."
+        )
+
+        st.write(
+            "🚫 Do not use elevators."
+        )
+
+        st.markdown("""
+<div class="disclaimer">
+
+<b>Scientific Limitation:</b>
+
+Ordinary weather data cannot reliably predict earthquakes.
+A real earthquake-risk system requires appropriate seismic,
+geological and historical earthquake datasets.
+
+</div>
+""", unsafe_allow_html=True)
+
+
+# ============================================================
+# AI ASSISTANT
+# ============================================================
+
+elif page == "🤖 AI Assistant":
+
+    st.subheader(
+        "🤖 Disaster AI Assistant"
+    )
+
+    st.write(
+        "Ask a disaster-safety question."
+    )
+
+    question = st.text_input(
+        "💬 Your question",
+        placeholder="What should I do during an earthquake?"
+    )
+
+    if question:
+
+        q = question.lower()
+
+        if "earthquake" in q:
+
+            response = """
+## 🌎 Earthquake Safety
+
+During an earthquake:
+
+1. DROP to the ground.
+2. COVER your head and neck.
+3. HOLD ON to sturdy shelter.
+4. Stay away from windows.
+5. Do not use elevators.
+6. If outdoors, move away from buildings,
+   trees and power lines.
+
+After the earthquake:
+
+- Check for injuries.
+- Expect aftershocks.
+- Avoid damaged buildings.
+- Follow official instructions.
+"""
+
+        elif "flood" in q:
+
+            response = """
+## 🌊 Flood Safety
+
+During flooding:
+
+1. Move to higher ground if advised.
+2. Never walk or drive through floodwater.
+3. Stay away from electrical hazards.
+4. Keep your phone charged.
+5. Follow official evacuation instructions.
+"""
+
+        elif "kit" in q:
+
+            response = """
+## 🎒 Emergency Kit
+
+Recommended items include:
+
+- Drinking water
+- Non-perishable food
+- First-aid kit
+- Medicines
+- Flashlight
+- Batteries
+- Power bank
+- Important documents
+- Emergency contacts
+"""
+
+        elif "evacuat" in q:
+
+            response = """
+## 🚨 Evacuation
+
+If official authorities issue an evacuation order,
+follow it promptly.
+
+Use official evacuation routes and do not depend
+only on this application for emergency decisions.
+"""
+
+        else:
+
+            response = """
+## 🤖 I Can Help With
+
+🌊 Flood safety
+
+🌎 Earthquake safety
+
+🎒 Emergency kits
+
+🚨 Evacuation preparation
+
+🏠 Disaster preparedness
+
+For a real emergency, always follow official
+emergency services and government instructions.
+"""
+
+        st.markdown(
+            response
+        )
+
+
+# ============================================================
+# EMERGENCY GUIDE
+# ============================================================
+
+elif page == "🚨 Emergency Guide":
+
+    st.subheader(
+        "🚨 Emergency Preparedness"
+    )
+
+    tab1, tab2, tab3 = st.tabs(
+        [
+            "🌊 Flood",
+            "🌎 Earthquake",
+            "🎒 Emergency Kit"
+        ]
+    )
+
+    with tab1:
+
+        st.header(
+            "🌊 Flood Safety"
+        )
+
+        st.subheader(
+            "Before"
+        )
+
+        st.write(
+            "✅ Monitor official warnings."
+        )
+
+        st.write(
+            "✅ Prepare an emergency kit."
+        )
+
+        st.write(
+            "✅ Protect important documents."
+        )
+
+        st.write(
+            "✅ Know evacuation routes."
+        )
+
+        st.write(
+            "✅ Charge phones and power banks."
+        )
+
+        st.subheader(
+            "During"
+        )
+
+        st.write(
+            "🚨 Move to higher ground when advised."
+        )
+
+        st.write(
+            "🚨 Never drive through floodwater."
+        )
+
+        st.write(
+            "🚨 Avoid electrical hazards."
+        )
+
+        st.write(
+            "🚨 Follow evacuation instructions."
+        )
+
+        st.subheader(
+            "After"
+        )
+
+        st.write(
+            "✅ Avoid contaminated water."
+        )
+
+        st.write(
+            "✅ Avoid damaged buildings."
+        )
+
+        st.write(
+            "✅ Watch for electrical hazards."
+        )
+
+    with tab2:
+
+        st.header(
+            "🌎 Earthquake Safety"
+        )
+
+        st.write(
+            "⬇️ DROP"
+        )
+
+        st.write(
+            "🛡️ COVER"
+        )
+
+        st.write(
+            "✊ HOLD ON"
+        )
+
+        st.write(
+            "🚫 Stay away from windows."
+        )
+
+        st.write(
+            "🚫 Do not use elevators."
+        )
+
+        st.subheader(
+            "After Earthquake"
+        )
+
+        st.write(
+            "✅ Check injuries."
+        )
+
+        st.write(
+            "✅ Expect aftershocks."
+        )
+
+        st.write(
+            "✅ Avoid damaged structures."
+        )
+
+        st.write(
+            "✅ Follow official instructions."
+        )
+
+    with tab3:
+
+        st.header(
+            "🎒 Emergency Kit"
+        )
+
+        items = [
+            "Drinking water",
+            "Non-perishable food",
+            "First-aid kit",
+            "Medicines",
+            "Flashlight",
+            "Batteries",
+            "Power bank",
+            "Important documents",
+            "Emergency contacts",
+            "Hygiene supplies"
+        ]
+
+        for item in items:
+
+            st.checkbox(
+                item
+            )
+
+
+# ============================================================
+# DATA ANALYSIS
+# ============================================================
+
+elif page == "📊 Dataset Analysis":
+
+    st.subheader(
+        "📊 Dataset Analysis"
+    )
+
+    df = st.session_state.dataset
+
+    if df is None:
+
+        st.info(
+            "Upload a CSV dataset from the sidebar."
+        )
+
+    else:
+
+        c1, c2, c3 = st.columns(3)
+
+        c1.metric(
+            "Rows",
+            f"{df.shape[0]:,}"
+        )
+
+        c2.metric(
+            "Columns",
+            df.shape[1]
+        )
+
+        c3.metric(
+            "Missing Values",
+            int(
+                df.isna().sum().sum()
+            )
+        )
+
+        st.markdown("---")
+
+        st.subheader(
+            "👀 Dataset Preview"
+        )
+
+        st.dataframe(
+            df.head(100),
+            use_container_width=True
+        )
+
+        st.subheader(
+            "📋 Column Information"
+        )
+
+        info = pd.DataFrame({
+            "Column": df.columns,
+            "Data Type": [
+                str(x)
+                for x in df.dtypes
+            ],
+            "Missing": [
+                int(df[c].isna().sum())
+                for c in df.columns
+            ],
+            "Unique": [
+                int(df[c].nunique())
+                for c in df.columns
+            ]
+        })
+
+        st.dataframe(
+            info,
+            use_container_width=True
+        )
+
+        numeric = df.select_dtypes(
+            include=np.number
+        )
+
+        if not numeric.empty:
+
+            st.subheader(
+                "📈 Data Distribution"
+            )
+
+            selected = st.selectbox(
+                "Select feature",
+                numeric.columns
+            )
+
+            fig = px.histogram(
+                df,
+                x=selected,
+                title=f"Distribution: {selected}"
+            )
+
+            st.plotly_chart(
+                fig,
+                use_container_width=True
+            )
+
+            if len(numeric.columns) >= 2:
+
+                st.subheader(
+                    "🔥 Correlation Matrix"
+                )
+
+                fig = px.imshow(
+                    numeric.corr(),
+                    text_auto=True,
+                    title="Feature Correlation"
+                )
+
+                st.plotly_chart(
+                    fig,
+                    use_container_width=True
+                )
+
+
+# ============================================================
+# MAP
+# ============================================================
+
+elif page == "🗺️ Risk Map":
+
+    st.subheader(
+        "🗺️ Geographic Risk Map"
+    )
+
+    df = st.session_state.dataset
+
+    if df is None:
+
+        st.info(
+            "Upload a CSV dataset containing latitude "
+            "and longitude."
+        )
+
+    else:
+
+        lat_col = find_column(
+            df,
+            ["latitude", "lat"]
+        )
+
+        lon_col = find_column(
+            df,
+            ["longitude", "longitude", "lon", "lng"]
+        )
+
+        if lat_col and lon_col:
+
+            map_df = df[
+                [lat_col, lon_col]
+            ].copy()
+
+            map_df.columns = [
+                "latitude",
+                "longitude"
+            ]
+
+            map_df["latitude"] = pd.to_numeric(
+                map_df["latitude"],
+                errors="coerce"
+            )
+
+            map_df["longitude"] = pd.to_numeric(
+                map_df["longitude"],
+                errors="coerce"
+            )
+
+            map_df = map_df.dropna()
+
+            st.map(
+                map_df,
+                latitude="latitude",
+                longitude="longitude",
+                use_container_width=True
+            )
+
+            st.success(
+                f"{len(map_df):,} locations displayed."
+            )
+
+        else:
+
+            st.warning(
+                "Latitude/longitude columns were not found."
+            )
+
+
+# ============================================================
+# ABOUT
+# ============================================================
+
+elif page == "ℹ️ About":
+
+    st.subheader(
+        "ℹ️ About Project"
+    )
+
+    st.markdown("""
+# 🌍 AI Disaster Alert & Emergency Assistant
+
+## Objective
+
+To develop an AI-powered disaster decision-support
+system that analyzes environmental information and
+provides flood-risk estimation, earthquake-risk
+indicators and emergency safety assistance.
+
+## Main Features
+
+### 🌊 Flood Prediction
+- Rainfall analysis
+- Humidity
+- Water level
+- Soil moisture
+- Atmospheric pressure
+- Wind speed
+- Random Forest ML when a suitable labeled dataset is uploaded
+
+### 🌎 Earthquake Risk
+- Historical seismic activity
+- Magnitude
+- Depth
+- Geographic location
+
+### 🤖 AI Assistant
+Provides safety guidance for:
+
+- Floods
+- Earthquakes
+- Emergency kits
+- Evacuation
+- Disaster preparation
+
+### 📊 Visualization
+
+- Interactive charts
+- Dataset analysis
+- Correlation matrix
+- Geographic map
+- Risk indicators
+
+## Technologies
+
+Python  
+Streamlit  
+Pandas  
+NumPy  
+Scikit-learn  
+Plotly  
+Machine Learning
+
+## Future Scope
+
+- Real-time weather APIs
+- Government disaster alerts
+- IoT sensors
+- Satellite imagery
+- GIS analysis
+- Real-time river monitoring
+- SMS/email notifications
+- Advanced deep-learning models
+
+## Limitation
+
+This is an academic decision-support prototype.
+
+It cannot guarantee prediction of natural disasters.
+
+Earthquake prediction requires specialized seismic,
+geological and historical datasets and cannot be
+reliably obtained from ordinary weather variables alone.
+""")
+
+    st.markdown("""
+<div class="disclaimer">
+
+<b>⚠️ Safety Disclaimer:</b>
+
+For actual emergencies, always follow official government,
+emergency-service and disaster-management instructions.
+
+</div>
+""", unsafe_allow_html=True)
+
+
+# ============================================================
+# FOOTER
+# ============================================================
+
+st.markdown("---")
+
+st.caption(
+    "🌍 AI Disaster Alert System | BTech AI/ML Project"
+)
